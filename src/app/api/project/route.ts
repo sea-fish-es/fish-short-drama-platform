@@ -119,8 +119,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     const aspectRatio = ['9:16', '16:9', '1:1'].includes(body.aspectRatio) ? body.aspectRatio : '16:9'
-    const projectType = ['drama', 'video'].includes(body.projectType) ? body.projectType : 'drama'
-    const targetDuration = projectType === 'video'
+    const projectType = ['drama', 'video', 'explainer'].includes(body.projectType) ? body.projectType : 'drama'
+    const targetDuration = projectType !== 'drama'
       ? Math.min(600, Math.max(0, Math.floor(Number(body.targetDuration) || 0)))
       : 0
     if (!name || name.length > 100) throw new RouteError(400, '项目名称长度必须为 1-100 个字符')

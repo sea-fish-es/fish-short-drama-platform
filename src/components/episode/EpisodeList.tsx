@@ -78,10 +78,10 @@ export default function EpisodeList() {
 
   const isOwner = currentProject?.isOwner !== false
   const generatedCount = episodes.filter(e => e.status === 'generated').length
-  const isVideo = currentProject?.projectType === 'video'
+  const isSingleEpisode = currentProject?.projectType !== 'drama'
 
-  // 长视频只有一集，不显示分集时间线，只显示一个生成按钮
-  if (isVideo) {
+  // 长视频/科普视频只有一集，不显示分集时间线，只显示一个生成按钮
+  if (isSingleEpisode) {
     const only = episodes[0]
     const done = only?.status === 'generated'
     return (

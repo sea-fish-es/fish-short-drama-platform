@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
     requireSceneAccess(db, sceneId, userId, 'write')
     const rows = db.exec(
       `SELECT sc.description, sc.dialogue, sc.duration, p.aspect_ratio, p.id, p.user_id,
-              p.output_path
+              p.output_path, p.project_type
        FROM scenes sc
        JOIN scripts s ON sc.script_id = s.id
        JOIN projects p ON s.project_id = p.id
@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
     const projectId = rows[0].values[0][4] as string
     const ownerUserId = rows[0].values[0][5] as string
     const legacyProjectPath = rows[0].values[0][6] as string
+    const projectType = (rows[0].values[0][7] as string) || 'drama'
 
     const imgRows = db.exec(
       'SELECT file_path FROM image_assets WHERE scene_id = ? AND is_current = 1',
@@ -67,9 +68,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const langPrefix = '[语言要求：本视频中所有角色必须且只能说中文普通话，禁止出现任何英文对话] '
+    const langPrefix = '[语言要求：本视频旁白/对白必须且只能是中文普通话，禁止出现任何英文] '
     let videoPrompt: string
-    if (cleanDialogue) {
+    if (projectType === 'explainer') {
+      // 科普/口播：画外音旁白解说，画面无人物开口、无口型
+      videoPrompt = cleanDialogue
+        ? `${langPrefix}${description}。以画外音旁白（中文普通话解说）朗读以下解说词，画面中不出现任何人物开口说话、无口型动作，仅作为解说配图：“${cleanDialogue}”。注意：旁白每一个字都必须是中文普通话，绝对不能说英文。`
+        : `${langPrefix}${description}。纯画面空镜，无旁白、无人物说话。`
+    } else if (cleanDialogue) {
       // Specify which character speaks by describing their appearance, and add lip-sync cue.
       const speakerClause = speakerDesc
         ? `画面中的${speakerName}（${speakerDesc}）开口说话，其嘴唇随台词自然开合做出说话口型，其他角色保持安静聆听，不要说话`

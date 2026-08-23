@@ -3,14 +3,17 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { scriptApi, getApiKeys } from '@/services/api.client'
-import { generateOutline, parseOutlineResponse, ParsedOutline } from '@/services/script.client'
+import { generateOutline, generateExplainerMeta, parseOutlineResponse, ParsedOutline } from '@/services/script.client'
 import { generateImage } from '@/services/agnes.client'
 import { showAlert, showConfirm, showPrompt } from '@/components/common/Dialog'
 
 export default function ScriptChat() {
   const { currentProject, messages, loading, progressMsg, genre, episodeCount, episodes, addMessage, setLoading, setProgressMsg, setEpisodes } = useAppStore()
   const [prompt, setPrompt] = useState('')
+  const [scriptMode, setScriptMode] = useState<'ai' | 'own'>('ai')  // 科普：AI写稿 / 我给稿
   const hasOutline = episodes.length > 0
+  const isExplainerProject = currentProject?.projectType === 'explainer'
+  const useOwnScript = isExplainerProject && scriptMode === 'own'
 
   useEffect(() => {
     if (!loading) return
@@ -40,30 +43,65 @@ export default function ScriptChat() {
     addMessage({ role: 'user', content: idea })
     try {
       const isVideo = currentProject.projectType === 'video'
-      let genrePrefix = ''
-      if (genre === 'auto') genrePrefix = isVideo ? '【请根据内容自动判断最适合的风格】' : '【请根据故事内容自动判断最适合的短剧类型风格】'
-      else if (genre) genrePrefix = `【类型：${genre}风格】`
-      const epCountPrefix = isVideo
-        ? '【这是一个完整的长视频作品，只有一集，必须有完整的起承转合和明确结局，不留悬念】'
-        : `【要求生成 ${episodeCount} 集】`
-      const fullPrompt = `${genrePrefix}${epCountPrefix}${idea}`
+      const isExplainer = currentProject.projectType === 'explainer'
 
-      setProgressMsg('正在生成大纲...')
       let parsed: ParsedOutline | null = null
       let outlineContent = ''
-      for (let attempt = 0; attempt < 3; attempt++) {
-        outlineContent = await generateOutline(fullPrompt, apiKey, currentProject.projectType)
-        try { parsed = parseOutlineResponse(outlineContent); break } catch { if (attempt >= 2) throw new Error('大纲生成失败，请重试') }
+
+      if (isExplainer && scriptMode === 'own') {
+        // 自带稿模式：AI 只提取标题/场景，原稿由前端原样注入
+        setProgressMsg('正在分析稿件...')
+        let meta: ParsedOutline | null = null
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const metaJson = await generateExplainerMeta(idea, apiKey)
+          try {
+            const m = JSON.parse(metaJson.match(/\{[\s\S]*\}/)?.[0] || '{}')
+            meta = {
+              title: m.title || '未命名视频', synopsis: m.synopsis || '',
+              totalEpisodes: 1, characters: [],
+              locations: (m.locations || []).map((l: any) => ({ name: l.name || '', description: l.description || '', keywords: l.keywords || '' })),
+              episodes: [],
+            }
+            break
+          } catch { if (attempt >= 2) throw new Error('稿件分析失败，请重试') }
+        }
+        if (!meta) throw new Error('稿件分析失败')
+        // 原稿逐字放入 episode.summary，标记 verbatim，切分镜时逐字保留
+        parsed = {
+          ...meta,
+          episodes: [{ number: 1, title: meta.title, summary: idea }],
+          verbatim: true,
+        }
+        outlineContent = JSON.stringify(parsed)
+      } else {
+        let genrePrefix = ''
+        if (genre === 'auto') genrePrefix = (isVideo || isExplainer) ? '【请根据内容自动判断最适合的风格】' : '【请根据故事内容自动判断最适合的短剧类型风格】'
+        else if (genre) genrePrefix = `【类型：${genre}风格】`
+        const epCountPrefix = isExplainer
+          ? '【这是一个完整的科普/口播视频，只有一集，全程画外音旁白解说，没有角色对白和剧情表演。请围绕主题生成完整、连贯、通俗的科普讲解内容】'
+          : isVideo
+          ? '【这是一个完整的长视频作品，只有一集，必须有完整的起承转合和明确结局，不留悬念】'
+          : `【要求生成 ${episodeCount} 集】`
+        const fullPrompt = `${genrePrefix}${epCountPrefix}${idea}`
+
+        setProgressMsg('正在生成大纲...')
+        for (let attempt = 0; attempt < 3; attempt++) {
+          outlineContent = await generateOutline(fullPrompt, apiKey, currentProject.projectType)
+          try { parsed = parseOutlineResponse(outlineContent); break } catch { if (attempt >= 2) throw new Error('大纲生成失败，请重试') }
+        }
+        if (!parsed) throw new Error('大纲生成失败')
       }
+
       if (!parsed) throw new Error('大纲生成失败')
+      const outline = parsed
 
       setProgressMsg('正在保存大纲...')
       const result = await scriptApi.save({
-        projectId: currentProject.id, outlineContent, parsed,
-        coverImage: null, characterImages: parsed.characters.map(() => null), locationImages: parsed.locations.map(() => null)
+        projectId: currentProject.id, outlineContent, parsed: outline,
+        coverImage: null, characterImages: outline.characters.map(() => null), locationImages: outline.locations.map(() => null)
       })
       setEpisodes(result.episodes, result.scriptId)
-      addMessage({ role: 'assistant', content: `大纲生成完成！共 ${result.episodes.length} 集。` })
+      addMessage({ role: 'assistant', content: isExplainer ? '大纲/场景已就绪！' : `大纲生成完成！共 ${result.episodes.length} 集。` })
 
       const aspectRatio = currentProject.aspectRatio || '16:9'
       const coverSize = aspectRatio === '9:16' ? '768x1024' : aspectRatio === '1:1' ? '1024x1024' : '1024x768'
@@ -76,8 +114,8 @@ export default function ScriptChat() {
       // Step A: 先生成角色 + 场景参考图（并行）
       type ImgTask = { type: string; name: string; prompt: string; size: string }
       const refTasks: ImgTask[] = [
-        ...parsed.characters.map(c => ({ type: 'character', name: c.name, prompt: `${c.keywords}，面朝镜头，半身像，中性背景`, size: '768x1024' })),
-        ...parsed.locations.map(l => ({ type: 'location', name: l.name, prompt: `${l.keywords}，广角镜头，电影感，无人物`, size: '1024x768' })),
+        ...outline.characters.map(c => ({ type: 'character', name: c.name, prompt: `${c.keywords}，面朝镜头，半身像，中性背景`, size: '768x1024' })),
+        ...outline.locations.map(l => ({ type: 'location', name: l.name, prompt: `${l.keywords}，广角镜头，电影感，无人物`, size: '1024x768' })),
       ]
       let nextIdx = 0
       let doneCount = 0
@@ -125,10 +163,26 @@ export default function ScriptChat() {
   return (
     <>
       <div className="idea-header">
-        <h3>故事构思</h3>
-        <div className="idea-sub">写下你的创意，AI 生成完整大纲</div>
+        <h3>{isExplainerProject ? (useOwnScript ? '粘贴稿件' : '主题构思') : '故事构思'}</h3>
+        <div className="idea-sub">
+          {isExplainerProject
+            ? (useOwnScript ? '粘贴你写好的旁白稿，AI 自动切分镜、配画面、逐字朗读' : '给一个主题，AI 生成完整科普解说')
+            : '写下你的创意，AI 生成完整大纲'}
+        </div>
       </div>
       <div className="idea-body">
+        {isExplainerProject && !hasOutline && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+            <button
+              className={scriptMode === 'ai' ? 'btn-accent' : 'btn-outline'}
+              style={{ flex: 1, fontSize: 12, padding: '6px 0' }}
+              onClick={() => setScriptMode('ai')} disabled={loading}>AI 写稿</button>
+            <button
+              className={scriptMode === 'own' ? 'btn-accent' : 'btn-outline'}
+              style={{ flex: 1, fontSize: 12, padding: '6px 0' }}
+              onClick={() => setScriptMode('own')} disabled={loading}>我来给稿</button>
+          </div>
+        )}
         {hasOutline ? (
           <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--color-text-tertiary)' }}>
             <p style={{ fontSize: 14, marginBottom: 6 }}>✓ 大纲已生成</p>
@@ -143,16 +197,25 @@ export default function ScriptChat() {
           <>
             <textarea
               className="idea-textarea"
-              placeholder={'输入你的故事想法……\n\n例如：一个替身演员顶替当红女星出席豪门晚宴，却被总裁一眼看穿……'}
+              style={useOwnScript ? { minHeight: 220 } : undefined}
+              placeholder={
+                useOwnScript
+                  ? '粘贴你写好的完整旁白稿……\n\n例如：一辆失控电车即将撞死五人，你手边有扳手，可让电车变道撞死一人。拉，还是死一人；不拉，死五人……'
+                  : isExplainerProject
+                    ? '输入科普主题……\n\n例如：蜂蜜是如何产生的'
+                    : '输入你的故事想法……\n\n例如：一个替身演员顶替当红女星出席豪门晚宴，却被总裁一眼看穿……'
+              }
               value={prompt}
               onChange={e => setPrompt(e.target.value)}
               disabled={loading}
             />
-            <div className="idea-prompts">
-              <button className="idea-prompt" onClick={() => fillIdea('一个替身演员被迫顶替当红女星，在豪门晚宴上遇到了识破她伪装的总裁。')}>替身 · 豪门</button>
-              <button className="idea-prompt" onClick={() => fillIdea('都市白领意外穿越到古代宫廷，用现代知识在后宫杀出一条血路。')}>穿越 · 宫斗</button>
-              <button className="idea-prompt" onClick={() => fillIdea('悬疑作家笔下的小说情节全部成真，而她成了连环命案的头号嫌疑人。')}>悬疑 · 反转</button>
-            </div>
+            {!isExplainerProject && (
+              <div className="idea-prompts">
+                <button className="idea-prompt" onClick={() => fillIdea('一个替身演员被迫顶替当红女星，在豪门晚宴上遇到了识破她伪装的总裁。')}>替身 · 豪门</button>
+                <button className="idea-prompt" onClick={() => fillIdea('都市白领意外穿越到古代宫廷，用现代知识在后宫杀出一条血路。')}>穿越 · 宫斗</button>
+                <button className="idea-prompt" onClick={() => fillIdea('悬疑作家笔下的小说情节全部成真，而她成了连环命案的头号嫌疑人。')}>悬疑 · 反转</button>
+              </div>
+            )}
             {loading && (
               <div style={{ marginTop: 12, padding: '10px 14px', background: 'var(--color-accent-soft)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--color-accent)' }}>
                 {progressMsg || '正在生成中……'}
@@ -173,11 +236,15 @@ export default function ScriptChat() {
       <div className="idea-footer">
         {!hasOutline && (
           <button className="btn-accent" onClick={() => handleGenerate()} disabled={loading || !prompt.trim()}>
-            {loading ? '生成中...' : '⚡ 生成完整大纲'}
+            {loading ? '生成中...' : useOwnScript ? '⚡ 用我的稿子生成' : isExplainerProject ? '⚡ 生成科普内容' : '⚡ 生成完整大纲'}
           </button>
         )}
         <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center' }}>
-          AI 将根据你的创意自动生成 {episodeCount || 15} 集剧本大纲
+          {useOwnScript
+            ? 'AI 会按你的原稿切分镜并逐字朗读（仅轻微断句）'
+            : isExplainerProject
+              ? 'AI 将根据主题生成完整科普解说'
+              : `AI 将根据你的创意自动生成 ${episodeCount || 15} 集剧本大纲`}
         </span>
       </div>
     </>

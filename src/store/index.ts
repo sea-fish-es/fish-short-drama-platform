@@ -15,6 +15,13 @@ export interface Project {
   targetDuration?: number
 }
 
+/** 项目类型中文标签 */
+export function typeLabel(projectType?: string): string {
+  if (projectType === 'video') return '长视频'
+  if (projectType === 'explainer') return '科普视频'
+  return '短剧'
+}
+
 export interface Episode {
   id: string
   number: number

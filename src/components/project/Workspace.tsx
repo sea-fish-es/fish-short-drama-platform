@@ -9,6 +9,7 @@ import PipelineControl from '@/components/pipeline/PipelineControl'
 import AssetLibrary from '@/components/assets/AssetLibrary'
 import { getDeployEnv, DeployInfo } from '@/services/deploy-env'
 import { logout } from '@/services/api.client'
+import { typeLabel } from '@/store'
 import { showAlert } from '@/components/common/Dialog'
 
 export default function Workspace() {
@@ -16,18 +17,19 @@ export default function Workspace() {
   const [leftTab, setLeftTab] = useState<'script' | 'assets'>('script')
   const [deployInfo, setDeployInfo] = useState<DeployInfo | null>(null)
 
-  const isVideo = currentProject?.projectType === 'video'
+  // 长视频、科普视频都是单集
+  const isSingleEpisode = currentProject?.projectType !== 'drama'
 
   useEffect(() => {
     fetch('/deploy-info.json').then(r => r.ok ? r.json() : null).then(setDeployInfo).catch(() => {})
   }, [])
 
-  // 长视频只有一集，自动选中，无需显示分集时间线
+  // 单集类型自动选中，无需显示分集时间线
   useEffect(() => {
-    if (isVideo && episodes.length > 0 && !currentEpisodeId) {
+    if (isSingleEpisode && episodes.length > 0 && !currentEpisodeId) {
       setCurrentEpisodeId(episodes[0].id)
     }
-  }, [isVideo, episodes, currentEpisodeId, setCurrentEpisodeId])
+  }, [isSingleEpisode, episodes, currentEpisodeId, setCurrentEpisodeId])
 
   if (!currentProject) return null
 
@@ -67,12 +69,12 @@ export default function Workspace() {
               {currentProject.dramaTitle || currentProject.name}
             </span>
             <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-              {currentProject.aspectRatio} · {currentProject.projectType === 'video' ? '长视频' : '短剧'}
+              {currentProject.aspectRatio} · {typeLabel(currentProject.projectType)}
             </span>
           </div>
           <div className="topbar-right">
-            <span className={`badge ${currentProject.projectType === 'video' ? 'badge-blue' : 'badge-gray'}`}>
-              {currentProject.projectType === 'video' ? '长视频' : '短剧'}
+            <span className={`badge ${currentProject.projectType !== 'drama' ? 'badge-blue' : 'badge-gray'}`}>
+              {typeLabel(currentProject.projectType)}
             </span>
             <button className="btn-commit" onClick={() => showAlert('请返回首页查看提交记录')}><span className="commit-dot"></span>提交记录</button>
           </div>
@@ -100,7 +102,7 @@ export default function Workspace() {
                     <>
                       {/* 剧集头部 */}
                       <div className="ed-header">
-                        {!isVideo && <div className="ed-num">第 {currentEpisode.number} 集</div>}
+                        {!isSingleEpisode && <div className="ed-num">第 {currentEpisode.number} 集</div>}
                         <div className="ed-title">{currentEpisode.title}</div>
                         <div className="ed-meta">
                           <span className={`ep-badge ${currentEpisode.status === 'generated' ? 'done' : 'pending'}`}>
@@ -112,7 +114,7 @@ export default function Workspace() {
                       {/* 剧情概要 */}
                       {currentEpisode.summary && (
                         <div className="story-block">
-                          <h4>{isVideo ? '剧情简介' : '剧情概要'}</h4>
+                          <h4>{currentProject.projectType === 'explainer' ? '解说大纲' : isSingleEpisode ? '剧情简介' : '剧情概要'}</h4>
                           <div className="story-text">{currentEpisode.summary}</div>
                         </div>
                       )}

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useAppStore } from '@/store'
+import { useAppStore, typeLabel } from '@/store'
 import { projectApi, setApiKey, setApiKeys, getApiKeys, logout } from '@/services/api.client'
 import { generateImage } from '@/services/agnes.client'
 import { downloadProtectedFile, ProtectedImage } from '@/components/common/ProtectedMedia'
@@ -21,7 +21,7 @@ export default function Home({ loggedIn, onLoginRequired }: HomeProps = {}) {
   const [aspectRatio, setAspectRatio] = useState('9:16')
   const [genre, setGenre] = useState('auto')
   const [episodeCount, setEpisodeCount] = useState('15')
-  const [projectType, setProjectType] = useState<'drama' | 'video'>('drama')
+  const [projectType, setProjectType] = useState<'drama' | 'video' | 'explainer'>('drama')
   const [videoDuration, setVideoDuration] = useState('60')
   const [customEpisodeCount, setCustomEpisodeCount] = useState('')
   const [creating, setCreating] = useState(false)
@@ -111,7 +111,7 @@ export default function Home({ loggedIn, onLoginRequired }: HomeProps = {}) {
     setCreating(true); setStoreGenre(genre)
     const epCount = episodeCount === 'custom' ? parseInt(customEpisodeCount) || 15 : parseInt(episodeCount)
     setStoreEpisodeCount(projectType === 'drama' ? epCount : 1)
-    const targetDuration = projectType === 'video' ? parseInt(videoDuration) || 60 : 0
+    const targetDuration = projectType !== 'drama' ? parseInt(videoDuration) || 60 : 0
     try { const project = await projectApi.create(newName.trim(), aspectRatio, projectType, targetDuration); setProjects([project, ...projects]); setCurrentProject(project); setNewName('') }
     catch (e: any) { showAlert(e.message) } finally { setCreating(false) }
   }
@@ -256,9 +256,10 @@ export default function Home({ loggedIn, onLoginRequired }: HomeProps = {}) {
                 </div>
                 <div className="field">
                   <label>类型</label>
-                  <select className="input-field" value={projectType} onChange={e => setProjectType(e.target.value as 'drama' | 'video')}>
+                  <select className="input-field" value={projectType} onChange={e => setProjectType(e.target.value as 'drama' | 'video' | 'explainer')}>
                     <option value="drama">短剧</option>
                     <option value="video">长视频</option>
+                    <option value="explainer">科普视频</option>
                   </select>
                 </div>
                 <div className="field">
@@ -296,7 +297,7 @@ export default function Home({ loggedIn, onLoginRequired }: HomeProps = {}) {
                   <input className="input-field" type="number" min={3} max={100} value={customEpisodeCount} onChange={e => setCustomEpisodeCount(e.target.value)} placeholder="集" />
                 </div>
               )}
-              {projectType === 'video' && (
+              {projectType !== 'drama' && (
                 <div className="field" style={{ marginTop: 12, maxWidth: 100 }}>
                   <label>时长</label>
                   <select className="input-field" value={videoDuration} onChange={e => setVideoDuration(e.target.value)}>
@@ -355,7 +356,7 @@ export default function Home({ loggedIn, onLoginRequired }: HomeProps = {}) {
                         ) : (
                           <>
                             <span>{project.aspectRatio}</span>
-                            <span>{project.projectType === 'video' ? '长视频' : '短剧'}</span>
+                            <span>{typeLabel(project.projectType)}</span>
                             {project.isPublic && <span style={{ background: 'var(--color-success-bg)', color: 'var(--color-success)' }}>公开</span>}
                           </>
                         )}
